@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Weather Arb Bot</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg:#0e1117;--panel:#161a23;--border:#2a3243;--text:#e8ebf2;--dim:#8a93a6;--accent:#4f8cff;--good:#10b981;--bad:#ef4444;--warn:#f59e0b;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;}
+header{background:var(--panel);border-bottom:1px solid var(--border);padding:14px 24px;display:flex;align-items:center;justify-content:space-between;}
+header h1{font-size:15px;font-weight:700;letter-spacing:.3px;}
+.badges{display:flex;gap:8px;}
+.badge{padding:3px 10px;border-radius:999px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;}
+.badge-paper{background:#173d2c;color:#6ee7b7;}
+.badge-live{background:#3d1717;color:#fca5a5;}
+.badge-on{background:#1e3a8a;color:#93c5fd;}
+.badge-off{background:#1e1e1e;color:#666;}
+.badge-scan{background:#4a3a17;color:#fde68a;}
+main{padding:20px 24px;max-width:1400px;margin:0 auto;}
+.grid{display:grid;gap:14px;margin-bottom:14px;}
+.g4{grid-template-columns:repeat(4,1fr);}
+.g2{grid-template-columns:1fr 1fr;}
+.g1{grid-template-columns:1fr;}
+@media(max-width:900px){.g4{grid-template-columns:1fr 1fr;}.g2{grid-template-columns:1fr;}}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px;}
+.card-title{font-size:11px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:12px;}
+.metric-val{font-size:26px;font-weight:700;margin-top:4px;}
+.metric-sub{font-size:11px;color:var(--dim);margin-top:3px;}
+.pos{color:var(--good)!important;}
+.neg{color:var(--bad)!important;}
+.zero{color:var(--dim)!important;}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th{font-size:11px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;padding:8px 10px;border-bottom:1px solid var(--border);text-align:left;}
+td{padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
+tr:last-child td{border-bottom:none;}
+td.r{text-align:right;font-variant-numeric:tabular-nums;}
+td.q{max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.pill{display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;}
+.pill-yes{background:#173d2c;color:#6ee7b7;}
+.pill-no{background:#3d1c17;color:#fca5a5;}
+.pill-warn{background:#4a3a17;color:#fde68a;}
+.pill-ok{background:#1c2a1c;color:var(--good);}
+.pill-class-hurricane{background:#4a3a17;color:#fde68a;}
+.pill-class-monthly_precip{background:#1e3a8a;color:#93c5fd;}
+.pill-class-daily_weather{background:#2a2a3a;color:#aaa;}
+.warn-row{background:rgba(245,158,11,.06);}
+.btn{background:#1c2230;color:var(--text);border:1px solid var(--border);padding:8px 14px;border-radius:6px;font-size:13px;cursor:pointer;font-family:inherit;transition:background .15s;}
+.btn:hover{background:#232a3a;}
+.btn:disabled{opacity:.45;cursor:not-allowed;}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff;}
+.btn-primary:hover:not(:disabled){background:#3b78f0;}
+.btn-danger{background:var(--bad);border-color:var(--bad);color:#fff;}
+.btn-danger:hover:not(:disabled){background:#dc2626;}
+.btn-close{background:transparent;color:var(--warn);border:1px solid var(--warn);padding:3px 9px;font-size:12px;border-radius:4px;cursor:pointer;}
+.btn-close:hover{background:var(--warn);color:#111;}
+.controls{display:flex;gap:9px;flex-wrap:wrap;}
+.scanlog{font-size:13px;color:var(--dim);line-height:1.8;margin-top:14px;}
+.scanlog b{color:var(--text);}
+.chart-wrap{height:220px;position:relative;}
+.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 20px;}
+.settings-grid label{display:flex;flex-direction:column;font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;gap:4px;}
+.settings-grid input{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:5px;font-size:13px;font-family:inherit;}
+.settings-grid input:focus{outline:1px solid var(--accent);}
+.save-row{grid-column:span 2;text-align:right;margin-top:4px;}
+footer{text-align:center;font-size:11px;color:var(--dim);padding:20px;}
+</style>
+</head>
+<body>
+<header>
+  <h1>🌦 Weather Arb Bot</h1>
+  <div class="badges">
+    <span id="badgePaper" class="badge badge-paper">PAPER</span>
+    <span id="badgeRun"   class="badge badge-off">STOPPED</span>
+  </div>
+</header>
+<main>
+
+<!-- Metric cards -->
+<div class="grid g4">
+  <div class="card">
+    <div class="card-title">Bankroll</div>
+    <div class="metric-val" id="mBankroll">—</div>
+    <div class="metric-sub" id="mBankrollSub">paper mode</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Open Positions</div>
+    <div class="metric-val" id="mOpen">—</div>
+    <div class="metric-sub" id="mExposure">—</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Unrealized P&amp;L</div>
+    <div class="metric-val" id="mUnreal">—</div>
+    <div class="metric-sub">live market price</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Total Realized P&amp;L</div>
+    <div class="metric-val" id="mRealized">—</div>
+    <div class="metric-sub" id="mLastScan">last scan: never</div>
+  </div>
+</div>
+
+<!-- Controls + P&L chart -->
+<div class="grid g2">
+  <div class="card">
+    <div class="card-title">Controls</div>
+    <div class="controls">
+      <button id="btnStart" class="btn btn-primary">▶ Start bot</button>
+      <button id="btnStop"  class="btn btn-danger">■ Stop bot</button>
+      <button id="btnScan"  class="btn">⚡ Scan now</button>
+      <button id="btnRefresh" class="btn">↻ Refresh prices</button>
+    </div>
+    <div class="scanlog" id="scanLog">No scans yet — click <b>Scan now</b> or <b>Start bot</b>.</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Cumulative Realized P&amp;L</div>
+    <div class="chart-wrap"><canvas id="pnlChart"></canvas></div>
+  </div>
+</div>
+
+<!-- Settings -->
+<div class="grid g1">
+  <div class="card">
+    <div class="card-title">Settings (saved to .env on server)</div>
+    <div class="settings-grid">
+      <label>Bankroll (USDC)<input id="s_BANKROLL_USDC" type="number" step="50"/></label>
+      <label>Kelly fraction (0.25 = ¼)<input id="s_KELLY_FRACTION" type="number" step="0.05" min="0.05" max="1"/></label>
+      <label>Edge threshold (guide: 0.07)<input id="s_EDGE_THRESHOLD" type="number" step="0.01" min="0.01" max="0.5"/></label>
+      <label>Max position % of bankroll<input id="s_MAX_POSITION_PCT" type="number" step="0.005" min="0.005" max="0.25"/></label>
+      <label>Max total exposure %<input id="s_MAX_TOTAL_EXPOSURE_PCT" type="number" step="0.01" min="0.05" max="1"/></label>
+      <label>Min market liquidity ($)<input id="s_MIN_LIQUIDITY_USD" type="number" step="50" min="50"/></label>
+      <label>Min hours to expiry<input id="s_MIN_HOURS_TO_EXPIRY" type="number" step="1" min="1"/></label>
+      <label>Max source disagreement<input id="s_MAX_SOURCE_DISAGREEMENT" type="number" step="0.01" min="0.05" max="1"/></label>
+      <label>Max daily drawdown %<input id="s_MAX_DAILY_DRAWDOWN_PCT" type="number" step="0.01" min="0.05" max="1"/></label>
+      <div class="save-row"><button id="btnSave" class="btn btn-primary">Save settings</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- Open positions -->
+<div class="grid g1">
+  <div class="card">
+    <div class="card-title">Open Positions (<span id="openCount">0</span>)</div>
+    <div style="overflow-x:auto">
+      <table id="openTable">
+        <thead><tr>
+          <th>Side</th><th>Type</th><th>Question</th>
+          <th>Entry</th><th>Current</th><th>Size</th>
+          <th class="r">Unreal P&amp;L</th><th>Entry Edge</th>
+          <th>Status</th><th></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Closed positions -->
+<div class="grid g1">
+  <div class="card">
+    <div class="card-title">Closed Positions (<span id="closedCount">0</span>)</div>
+    <div style="overflow-x:auto">
+      <table id="closedTable">
+        <thead><tr>
+          <th>Side</th><th>Type</th><th>Question</th>
+          <th>Entry</th><th>Exit</th><th>Size</th>
+          <th class="r">Realized P&amp;L</th><th>Reason</th><th>Closed</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Signals -->
+<div class="grid g1">
+  <div class="card">
+    <div class="card-title">Recent Signals (latest 25)</div>
+    <div style="overflow-x:auto">
+      <table id="sigTable">
+        <thead><tr>
+          <th>Time</th><th>Side</th><th>Type</th><th>Question</th>
+          <th class="r">Model</th><th class="r">Market</th>
+          <th class="r">Edge</th><th class="r">EV</th>
+          <th class="r">Size</th><th>Executed</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+</main>
+<footer>Polls every 5s · Scanner runs every 30 min · Price refresh every 5 min · PAPER_TRADE=True blocks all real orders</footer>
+
+<script>
+const $ = sel => document.querySelector(sel);
+const esc = s => (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+const fmtNum = n => n == null ? '—' : n.toFixed(3);
+const fmtPct = n => n == null ? '—' : (n*100).toFixed(1)+'%';
+const fmtMoney = n => {
+  if(n==null) return '—';
+  const s = n>=0 ? '+$' : '−$';
+  return s+Math.abs(n).toFixed(2);
+};
+const fmtMoneyPlain = n => n==null ? '—' : '$'+n.toFixed(2);
+const fmtTime = iso => {
+  if(!iso) return '—';
+  const d=new Date(iso);
+  return d.toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+};
+const sideHtml = side => `<span class="pill pill-${(side||'').toLowerCase()}">${side||'—'}</span>`;
+const classHtml = cls => {
+  const label = {'monthly_precip':'PRECIP','hurricane':'HURRICANE','daily_weather':'DAILY'}[cls] || (cls||'?');
+  return `<span class="pill pill-class-${cls||''}">${label}</span>`;
+};
+const moneyClass = n => n>0 ? 'pos' : (n<0 ? 'neg' : 'zero');
+
+// P&L Chart
+let chart;
+function initChart(){
+  const ctx = $('#pnlChart').getContext('2d');
+  chart = new Chart(ctx,{
+    type:'line',
+    data:{datasets:[{
+      label:'Realized P&L',
+      data:[],
+      borderColor:'#34d399',
+      backgroundColor:'rgba(52,211,153,.12)',
+      tension:.25,pointRadius:3,fill:true,
+    }]},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      scales:{
+        x:{type:'time',time:{unit:'hour'},grid:{color:'#2a3243'},ticks:{color:'#8a93a6'}},
+        y:{grid:{color:'#2a3243'},ticks:{color:'#8a93a6',callback:v=>'$'+v.toFixed(0)}},
+      },
+      plugins:{legend:{display:false}},
+    },
+  });
+}
+
+async function api(path, opts={}){
+  const r = await fetch(path, opts);
+  if(!r.ok){
+    const txt = await r.text().catch(()=>'');
+    throw new Error(`${path} → HTTP ${r.status} ${txt.slice(0,120)}`);
+  }
+  return r.json();
+}
+
+function renderStatus(s){
+  // Badges
+  const pb = $('#badgePaper');
+  pb.className='badge '+(s.paper_trade ? 'badge-paper' : 'badge-live');
+  pb.textContent = s.paper_trade ? 'PAPER' : 'LIVE ⚡';
+
+  const rb = $('#badgeRun');
+  if(s.scan_in_progress){rb.className='badge badge-scan';rb.textContent='SCANNING';}
+  else if(s.running){rb.className='badge badge-on';rb.textContent='RUNNING';}
+  else{rb.className='badge badge-off';rb.textContent='STOPPED';}
+
+  // Metrics
+  $('#mBankroll').textContent = fmtMoneyPlain(s.bankroll);
+  $('#mBankrollSub').textContent = s.paper_trade ? 'paper mode · no real orders' : 'LIVE USDC';
+  $('#mOpen').textContent = s.open_positions ?? 0;
+  $('#mExposure').textContent = `$${(s.open_exposure||0).toFixed(2)} exposure`;
+  const u = $('#mUnreal');
+  u.textContent = fmtMoney(s.unrealized_pnl);
+  u.className = 'metric-val ' + moneyClass(s.unrealized_pnl);
+  const r = $('#mRealized');
+  r.textContent = fmtMoney(s.total_realized ?? s.daily_pnl);
+  r.className = 'metric-val ' + moneyClass(s.total_realized ?? s.daily_pnl);
+  $('#mLastScan').textContent = 'last scan: '+(s.last_scan_at ? fmtTime(s.last_scan_at) : 'never');
+
+  // Scan log
+  const x = s.last_scan_stats;
+  if(x && Object.keys(x).length){
+    $('#scanLog').innerHTML =
+      `<b>${x.signals??0}</b> signals &nbsp;·&nbsp; `+
+      `<b>${x.executed??0}</b> executed &nbsp;·&nbsp; `+
+      `<b>${x.skipped??0}</b> skipped &nbsp;·&nbsp; `+
+      `<b>${x.auto_exits??0}</b> auto-exits (TP/SL/flip) &nbsp;·&nbsp; `+
+      `<b>${x.closed??0}</b> resolved &nbsp;·&nbsp; `+
+      `<b>${x.errors??0}</b> errors`;
+  }
+}
+
+function renderOpen(rows){
+  $('#openCount').textContent = rows.length;
+  const tb = $('#openTable tbody');
+  if(!rows.length){
+    tb.innerHTML='<tr><td colspan="10" style="text-align:center;color:var(--dim);padding:20px">No open positions · click Scan now to find trades</td></tr>';
+    return;
+  }
+  tb.innerHTML = rows.map(p=>{
+    const u = p.unrealized_pnl;
+    const cur = p.current_price;
+    const entEdge = (p.entry_model_p!=null && p.entry_market_yes_p!=null)
+      ? (p.entry_model_p - p.entry_market_yes_p)
+      : (p.model_p!=null && p.signal_market_p!=null ? p.model_p - p.signal_market_p : null);
+    const cls = p.metadata?.market_class || 'unknown';
+    const statusHtml = p.thesis_changed
+      ? `<span class="pill pill-warn" title="${esc(p.thesis_note)}">⚠ Thesis flipped</span>`
+      : `<span class="pill pill-ok">✓ on track</span>`;
+    return `<tr${p.thesis_changed?' class="warn-row"':''}>
+      <td>${sideHtml(p.side)}</td>
+      <td>${classHtml(cls)}</td>
+      <td class="q" title="${esc(p.question)}">${esc(p.question)||'—'}</td>
+      <td class="r">${fmtNum(p.entry_price)}</td>
+      <td class="r">${fmtNum(cur)}</td>
+      <td class="r">${fmtMoneyPlain(p.size_usdc)}</td>
+      <td class="r ${moneyClass(u)}">${fmtMoney(u)}</td>
+      <td class="r">${entEdge!=null?(entEdge>=0?'+':''+(entEdge*100).toFixed(1)+'pp'):'—'}</td>
+      <td>${statusHtml}</td>
+      <td><button class="btn-close" onclick="closePos(${p.id},'${esc(p.side)}',${p.entry_price||0},${cur||0})">Close</button></td>
+    </tr>`;
+  }).join('');
+}
+
+async function closePos(id, side, entry, cur){
+  const pct = cur>0&&entry>0 ? ((cur-entry)/entry*100).toFixed(1)+'%' : '?';
+  if(!confirm(`Close ${side} position #${id}?\n\nEntry:  ${entry.toFixed(4)}\nCurrent: ${cur.toFixed(4)}\nReturn:  ${pct}\n\n(Paper: marks closed at current market price)`)) return;
+  try{
+    const res = await api(`/api/positions/${id}/close`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:'manual'})});
+    alert(`Closed!\nExit: ${res.exit_price?.toFixed(4)}\nP&L: ${fmtMoney(res.pnl)}`);
+    refresh();
+  }catch(e){alert('Close failed: '+e.message);}
+}
+
+function renderClosed(rows){
+  $('#closedCount').textContent = rows.length;
+  const tb = $('#closedTable tbody');
+  if(!rows.length){
+    tb.innerHTML='<tr><td colspan="9" style="text-align:center;color:var(--dim);padding:20px">No closed positions yet</td></tr>';
+    return;
+  }
+  tb.innerHTML = rows.map(p=>{
+    const cls = 'unknown'; // closed positions don't carry metadata easily
+    const reason = p.close_reason || 'resolution';
+    return `<tr>
+      <td>${sideHtml(p.side)}</td>
+      <td>${classHtml(cls)}</td>
+      <td class="q" title="${esc(p.question)}">${esc(p.question)||'—'}</td>
+      <td class="r">${fmtNum(p.entry_price)}</td>
+      <td class="r">${fmtNum(p.exit_price)}</td>
+      <td class="r">${fmtMoneyPlain(p.size_usdc)}</td>
+      <td class="r ${moneyClass(p.pnl)}">${fmtMoney(p.pnl)}</td>
+      <td>${esc(reason)}</td>
+      <td>${fmtTime(p.exit_time)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderSignals(rows){
+  const tb = $('#sigTable tbody');
+  if(!rows.length){
+    tb.innerHTML='<tr><td colspan="10" style="text-align:center;color:var(--dim);padding:20px">No signals yet</td></tr>';
+    return;
+  }
+  tb.innerHTML = rows.slice(0,25).map(s=>{
+    const edge = s.model_p!=null&&s.market_p!=null ? s.model_p-s.market_p : null;
+    const cls = s.market_class || 'unknown';
+    const execBadge = s.executed ? `<span class="pill pill-ok">✓ executed</span>` : `<span style="color:var(--dim);font-size:11px">signal only</span>`;
+    return `<tr>
+      <td style="white-space:nowrap;font-size:12px">${fmtTime(s.timestamp)}</td>
+      <td>${sideHtml(s.recommended_side)}</td>
+      <td>${classHtml(cls)}</td>
+      <td class="q" title="${esc(s.question)}">${esc(s.question)||'—'}</td>
+      <td class="r">${fmtNum(s.model_p)}</td>
+      <td class="r">${fmtNum(s.market_p)}</td>
+      <td class="r ${edge!=null&&edge*s.recommended_side!='NO'?'pos':'neg'}">${edge!=null?(edge>=0?'+':''+(edge*100).toFixed(1)+'pp'):'—'}</td>
+      <td class="r ${moneyClass(s.ev)}">${s.ev!=null?(s.ev>=0?'+':'')+s.ev.toFixed(3):'—'}</td>
+      <td class="r">${fmtMoneyPlain(s.kelly_size)}</td>
+      <td>${execBadge}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderChart(curve){
+  if(!chart) return;
+  chart.data.datasets[0].data = (curve.realized_points||[]).map(p=>({x:new Date(p.t),y:p.cumulative_pnl}));
+  chart.update('none');
+}
+
+function renderSettings(s){
+  Object.entries(s).forEach(([k,v])=>{const el=$('#s_'+k);if(el)el.value=v;});
+}
+
+async function refresh(){
+  try{
+    const [status,opens,closeds,sigs,curve] = await Promise.all([
+      api('/api/status'),
+      api('/api/positions'),
+      api('/api/positions/closed'),
+      api('/api/signals?limit=25'),
+      api('/api/pnl_curve'),
+    ]);
+    // Enrich status with total realized from curve
+    status.total_realized = curve.total_realized;
+    renderStatus(status);
+    renderOpen(opens);
+    renderClosed(closeds);
+    renderSignals(sigs);
+    renderChart(curve);
+  }catch(e){
+    console.error('refresh failed',e);
+  }
+}
+
+// Button handlers
+$('#btnStart').onclick = async()=>{
+  $('#btnStart').disabled=true;
+  $('#btnStart').textContent='Starting...';
+  try{
+    await api('/api/bot/start',{method:'POST'});
+    $('#scanLog').innerHTML='<b>Bot started</b> — first scan running in background...';
+    await refresh();
+  }catch(e){alert('Start failed: '+e.message);}
+  finally{$('#btnStart').disabled=false;$('#btnStart').textContent='▶ Start bot';}
+};
+
+$('#btnStop').onclick = async()=>{
+  try{await api('/api/bot/stop',{method:'POST'});}
+  catch(e){alert('Stop failed: '+e.message);}
+  refresh();
+};
+
+$('#btnScan').onclick = async()=>{
+  const btn=$('#btnScan');
+  btn.disabled=true;
+  btn.textContent='⏳ Scanning...';
+  $('#scanLog').textContent='Scanning Polymarket + weather APIs (~30 seconds)...';
+  try{
+    const res = await api('/api/bot/scan_now',{method:'POST'});
+    const x = res.stats||{};
+    $('#scanLog').innerHTML=
+      `<b>Scan complete</b> &nbsp;·&nbsp; `+
+      `<b>${x.signals??0}</b> signals &nbsp;·&nbsp; `+
+      `<b>${x.executed??0}</b> executed &nbsp;·&nbsp; `+
+      `<b>${x.skipped??0}</b> skipped &nbsp;·&nbsp; `+
+      `<b>${x.auto_exits??0}</b> auto-exits &nbsp;·&nbsp; `+
+      `<b>${x.closed??0}</b> resolved`;
+    btn.textContent='✓ Done';
+    await refresh();
+    setTimeout(()=>{btn.textContent='⚡ Scan now';btn.disabled=false;},3000);
+  }catch(e){
+    alert('Scan failed: '+e.message);
+    btn.textContent='⚡ Scan now';
+    btn.disabled=false;
+  }
+};
+
+$('#btnRefresh').onclick = async()=>{
+  $('#btnRefresh').disabled=true;
+  try{await api('/api/resolver/run',{method:'POST'});}
+  catch(e){alert('Refresh failed: '+e.message);}
+  finally{setTimeout(()=>{$('#btnRefresh').disabled=false;refresh();},800);}
+};
+
+$('#btnSave').onclick = async()=>{
+  const keys=['BANKROLL_USDC','KELLY_FRACTION','EDGE_THRESHOLD','MAX_POSITION_PCT',
+              'MAX_TOTAL_EXPOSURE_PCT','MIN_LIQUIDITY_USD','MIN_HOURS_TO_EXPIRY',
+              'MAX_SOURCE_DISAGREEMENT','MAX_DAILY_DRAWDOWN_PCT'];
+  const payload={};
+  keys.forEach(k=>{const v=parseFloat($('#s_'+k)?.value);if(!isNaN(v))payload[k]=v;});
+  try{
+    await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    $('#btnSave').textContent='Saved ✓';
+    setTimeout(()=>$('#btnSave').textContent='Save settings',2000);
+  }catch(e){alert('Save failed: '+e.message);}
+};
+
+// Boot
+initChart();
+api('/api/settings').then(renderSettings).catch(()=>{});
+refresh();
+setInterval(refresh,5000);
+</script>
+</body>
+</html>

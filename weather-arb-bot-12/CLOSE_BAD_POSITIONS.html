@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Fix Bot Positions</title>
+<style>
+  body { font-family: monospace; background: #111; color: #eee; padding: 40px; max-width: 600px; margin: 0 auto; }
+  h1 { color: #f90; }
+  button { background: #f90; color: #000; border: none; padding: 20px 40px; font-size: 20px; 
+           cursor: pointer; border-radius: 8px; width: 100%; margin: 10px 0; }
+  button:hover { background: #fa0; }
+  #log { background: #222; padding: 20px; border-radius: 8px; margin-top: 20px; min-height: 100px; }
+  .ok { color: #0f0; } .err { color: #f00; } .info { color: #aaa; }
+</style>
+</head>
+<body>
+<h1>🔧 Fix Bot Positions</h1>
+<p>This will close all stuck positions that can't be closed via the UI.</p>
+<button onclick="fixPositions()">⚡ CLOSE ALL STUCK POSITIONS NOW</button>
+<div id="log"><span class="info">Click the button above...</span></div>
+<script>
+function log(msg, cls) {
+  var d = document.getElementById('log');
+  d.innerHTML += '<br><span class="'+(cls||'info')+'">'+msg+'</span>';
+}
+
+async function fixPositions() {
+  document.querySelector('button').disabled = true;
+  document.getElementById('log').innerHTML = '';
+  log('Connecting to bot at localhost:8000...');
+  
+  // First try the new force_close_all endpoint
+  try {
+    var r = await fetch('http://localhost:8000/api/positions/force_close_all', {method:'POST'});
+    if (r.ok) {
+      var d = await r.json();
+      log('SUCCESS! Closed ' + d.force_closed + ' positions:', 'ok');
+      d.positions.forEach(function(p) { log('  Position #'+p.id+' pnl=$'+p.pnl, 'ok'); });
+      log('Refresh http://localhost:8000 to see the changes', 'ok');
+      document.querySelector('button').disabled = false;
+      return;
+    }
+  } catch(e) {}
+  
+  // Fallback: try closing positions one by one using force
+  log('Trying individual close with fallback...');
+  try {
+    var posR = await fetch('http://localhost:8000/api/positions');
+    var positions = await posR.json();
+    log('Found ' + positions.length + ' open positions');
+    
+    var closed = 0;
+    for (var p of positions) {
+      try {
+        var cr = await fetch('http://localhost:8000/api/positions/'+p.id+'/close', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({reason:'force_closed'})
+        });
+        var cd = await cr.json();
+        if (cr.ok) {
+          log('Closed #'+p.id+': '+JSON.stringify(cd), 'ok');
+          closed++;
+        } else {
+          log('Failed #'+p.id+': '+JSON.stringify(cd), 'err');
+        }
+      } catch(e) {
+        log('Error on #'+p.id+': '+e.message, 'err');
+      }
+    }
+    if (closed > 0) {
+      log('Closed ' + closed + ' of ' + positions.length + ' positions', 'ok');
+      log('Refresh http://localhost:8000', 'ok');
+    } else {
+      log('Could not close positions with old code. Download new zip from Claude.', 'err');
+    }
+  } catch(e) {
+    log('Bot not running at localhost:8000. Start the bot first then try again.', 'err');
+  }
+  
+  document.querySelector('button').disabled = false;
+}
+</script>
+</body>
+</html>
