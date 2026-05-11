@@ -66,9 +66,28 @@ def get_clob_client() -> Any:
             "Install with: pip install py-clob-client"
         )
 
-    private_key = os.getenv("POLYMARKET_PRIVATE_KEY")
+    private_key = os.getenv("POLYMARKET_PRIVATE_KEY", "").strip()
     if not private_key:
         raise ValueError("POLYMARKET_PRIVATE_KEY is not set in environment")
+
+    # Strip any accidental whitespace, quotes, or invisible characters
+    # that get added when pasting into .env files
+    private_key = private_key.strip().strip('"').strip("'").strip()
+
+    # Validate it looks like a hex private key
+    hex_part = private_key[2:] if private_key.startswith(('0x', '0X')) else private_key
+    if len(hex_part) != 64:
+        raise ValueError(
+            f"POLYMARKET_PRIVATE_KEY has wrong length ({len(hex_part)} hex chars, expected 64). "
+            f"Check your .env file for extra spaces or characters."
+        )
+    invalid = [c for c in hex_part if c not in '0123456789abcdefABCDEF']
+    if invalid:
+        raise ValueError(
+            f"POLYMARKET_PRIVATE_KEY contains invalid characters: {invalid[:3]}. "
+            f"This usually means a space, newline, or smart quote was added when pasting. "
+            f"Open your .env file in a plain text editor and re-paste the key carefully."
+        )
 
     client = ClobClient(host=CLOB_HOST, key=private_key, chain_id=CHAIN_ID)
     client.set_api_creds(client.create_or_derive_api_creds())
@@ -202,6 +221,74 @@ def execute_signal(signal: dict, client: Any = None) -> dict:
                 logger.info(
                     f"Skip {contract_id[:12]}: already have {correlated_count} correlated "
                     f"global_temp positions for {my_year}"
+                )
+                return {
+                    "contract_id": contract_id,
+                    "side": side,
+                    "status": "skipped_correlated",
+                }
+
+        elif cls == "monthly_temp_rank":
+            # Same-month/year temperature ranking contracts are highly correlated —
+            # e.g. "May 2026 3rd hottest" and "May 2026 4th-or-lower hottest".
+            # Cap at 2 open positions per month+year combination.
+            my_month = metadata.get("temp_month")
+            my_year_r = metadata.get("temp_year", 0)
+            correlated_count = 0
+            for p in open_pos:
+                with get_conn() as conn:
+                    existing_meta = conn.execute(
+                        "SELECT market_class FROM signals WHERE contract_id = ? "
+                        "ORDER BY id DESC LIMIT 1",
+                        (p.get("contract_id"),)
+                    ).fetchone()
+                if existing_meta and existing_meta["market_class"] == "monthly_temp_rank":
+                    # Check the position's contract metadata via the signal question
+                    with get_conn() as conn:
+                        eq_sig = conn.execute(
+                            "SELECT question FROM signals WHERE contract_id = ? "
+                            "ORDER BY id DESC LIMIT 1",
+                            (p.get("contract_id"),)
+                        ).fetchone()
+                    if eq_sig:
+                        eq = (eq_sig["question"] or "").lower()
+                        import calendar as _cal_corr
+                        month_name = ""
+                        if my_month:
+                            try:
+                                month_name = list(_cal_corr.month_name)[my_month].lower()
+                            except Exception:
+                                pass
+                        if (month_name and month_name in eq) and str(my_year_r) in eq:
+                            correlated_count += 1
+            if correlated_count >= 2:
+                logger.info(
+                    f"Skip {contract_id[:12]}: already have {correlated_count} correlated "
+                    f"monthly_temp_rank positions for month={my_month}/{my_year_r}"
+                )
+                return {
+                    "contract_id": contract_id,
+                    "side": side,
+                    "status": "skipped_correlated",
+                }
+
+        elif cls == "arctic_sea_ice":
+            # All Arctic sea ice extent markets for the same year are correlated
+            # (they all resolve against the same minimum extent measurement).
+            # Cap at 2 open positions.
+            correlated_count = 0
+            for p in open_pos:
+                with get_conn() as conn:
+                    mc_row = conn.execute(
+                        "SELECT market_class FROM signals WHERE contract_id=? ORDER BY id DESC LIMIT 1",
+                        (p.get("contract_id"),)
+                    ).fetchone()
+                if mc_row and mc_row["market_class"] == "arctic_sea_ice":
+                    correlated_count += 1
+            if correlated_count >= 2:
+                logger.info(
+                    f"Skip {contract_id[:12]}: already have {correlated_count} correlated "
+                    f"arctic_sea_ice positions"
                 )
                 return {
                     "contract_id": contract_id,
