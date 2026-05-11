@@ -272,7 +272,10 @@ function renderStatus(s){
   const r = $('#mRealized');
   r.textContent = fmtMoney(s.total_realized ?? s.daily_pnl);
   r.className = 'metric-val ' + moneyClass(s.total_realized ?? s.daily_pnl);
-  $('#mLastScan').textContent = 'last scan: '+(s.last_scan_at ? fmtTime(s.last_scan_at) : 'never');
+  const lastScanText = 'last scan: '+(s.last_scan_at ? fmtTime(s.last_scan_at) : 'never');
+  const gapWarn = s.scan_gap_warning ? ` ⚠ ${s.scan_gap_minutes?.toFixed(0)}min ago` : '';
+  $('#mLastScan').textContent = lastScanText + gapWarn;
+  $('#mLastScan').style.color = s.scan_gap_warning ? 'var(--warn)' : '';
 
   // Scan log
   const x = s.last_scan_stats;
@@ -296,7 +299,14 @@ function renderOpen(rows){
   }
   tb.innerHTML = rows.map(p=>{
     const u = p.unrealized_pnl;
-    const cur = p.current_price;
+    // Normalise prices to YES-equivalent for consistent display.
+    // Resolver stores current_price as the SIDE price (NO price for NO positions).
+    // entry_price is also the SIDE price (NO limit price for NO positions).
+    // Convert both to YES price so Entry/Current columns always show YES market price.
+    const curRaw = p.current_price;
+    const entRaw = p.entry_price;
+    const cur  = (p.side === 'NO' && curRaw != null) ? +(1 - curRaw).toFixed(4) : curRaw;
+    const ent  = (p.side === 'NO' && entRaw != null) ? +(1 - entRaw).toFixed(4) : entRaw;
     const entEdge = (p.entry_model_p!=null && p.entry_market_yes_p!=null)
       ? (p.entry_model_p - p.entry_market_yes_p)
       : (p.model_p!=null && p.signal_market_p!=null ? p.model_p - p.signal_market_p : null);
@@ -308,13 +318,13 @@ function renderOpen(rows){
       <td>${sideHtml(p.side)}</td>
       <td>${classHtml(cls)}</td>
       <td class="q" title="${esc(p.question)}">${esc(p.question)||'—'}</td>
-      <td class="r">${fmtNum(p.entry_price)}</td>
+      <td class="r">${fmtNum(ent)}</td>
       <td class="r">${fmtNum(cur)}</td>
       <td class="r">${fmtMoneyPlain(p.size_usdc)}</td>
       <td class="r ${moneyClass(u)}">${fmtMoney(u)}</td>
       <td class="r">${entEdge!=null?(entEdge>=0?'+':''+(entEdge*100).toFixed(1)+'pp'):'—'}</td>
       <td>${statusHtml}</td>
-      <td><button class="btn-close" onclick="closePos(${p.id},'${esc(p.side)}',${p.entry_price||0},${cur||0})">Close</button></td>
+      <td><button class="btn-close" onclick="closePos(${p.id},'${esc(p.side)}',${entRaw||0},${curRaw||0})">Close</button></td>
     </tr>`;
   }).join('');
 }
@@ -337,7 +347,7 @@ function renderClosed(rows){
     return;
   }
   tb.innerHTML = rows.map(p=>{
-    const cls = 'unknown'; // closed positions don't carry metadata easily
+    const cls = p.market_class || 'unknown'; // populated from signals join
     const reason = p.close_reason || 'resolution';
     return `<tr>
       <td>${sideHtml(p.side)}</td>
