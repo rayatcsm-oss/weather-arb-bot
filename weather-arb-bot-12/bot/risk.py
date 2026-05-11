@@ -46,8 +46,29 @@ class RiskCheck:
 # ---------------------------------------------------------------------------
 
 def check_position_size(size_usdc: float, bankroll: float) -> RiskCheck:
-    """No single position may exceed MAX_POSITION_PCT of bankroll (default 2%)."""
+    """
+    No single position may exceed MAX_POSITION_PCT of bankroll (default 2%).
+
+    Exception: Polymarket's minimum order is $1.00. When bankroll is small
+    (< $50), the 2% cap falls below $1.00. In that case we allow up to $1.00
+    as the minimum viable trade size, but only if it doesn't exceed 10% of
+    bankroll (a reasonable upper bound for small accounts).
+    """
     max_size = MAX_POSITION_PCT * bankroll
+    POLYMARKET_MIN = 1.0
+
+    # For small bankrolls where 2% < $1, allow the $1 minimum order
+    # but cap at 10% of bankroll as an absolute ceiling
+    if max_size < POLYMARKET_MIN:
+        absolute_max = bankroll * 0.10
+        if size_usdc > absolute_max and size_usdc > POLYMARKET_MIN:
+            return RiskCheck(
+                False,
+                f"position ${size_usdc:.2f} exceeds 10% ceiling ${absolute_max:.2f} "
+                f"(small-bankroll mode, bankroll=${bankroll:.2f})",
+            )
+        return RiskCheck(True)  # allow $1 minimum on small accounts
+
     if size_usdc > max_size:
         return RiskCheck(
             False,
@@ -61,11 +82,28 @@ def check_total_exposure(new_position_size: float, bankroll: float) -> RiskCheck
     """
     Total open exposure across all weather contracts must not exceed
     MAX_TOTAL_EXPOSURE_PCT of bankroll (default 20%).
+
+    Small-bankroll exception: when bankroll < $50, we allow up to 4 positions
+    of $1.00 each ($4 total) as that's the minimum viable portfolio.
+    This is a deliberate deviation from the guide's 20% rule for accounts
+    where the $1 Polymarket minimum already represents a large % of bankroll.
     """
     open_positions = get_open_positions()
     current_exposure = sum(p.get("size_usdc", 0.0) or 0.0 for p in open_positions)
     new_total = current_exposure + new_position_size
     max_total = MAX_TOTAL_EXPOSURE_PCT * bankroll
+
+    # Small bankroll: allow up to 4 × $1 minimum orders
+    if bankroll < 50.0:
+        small_account_max = 4.0  # 4 positions × $1 minimum
+        if new_total > small_account_max:
+            return RiskCheck(
+                False,
+                f"total exposure ${new_total:.2f} would exceed "
+                f"${small_account_max:.2f} (4-position limit for small accounts)",
+            )
+        return RiskCheck(True)
+
     if new_total > max_total:
         return RiskCheck(
             False,
@@ -164,9 +202,15 @@ def run_all_checks(signal: dict, bankroll: float) -> tuple[bool, list[str]]:
         ("daily_drawdown",     check_daily_drawdown(bankroll)),
     ]
 
-    # Resolution date may be in metadata.date (ISO date) or contract.resolution_date (ISO datetime)
+    # Resolution date — must cover all market types:
+    #   daily_weather  -> metadata["date"]       (ISO date)
+    #   monthly_precip -> metadata["date"]       (last day of month as ISO date)
+    #   hurricane      -> metadata["deadline"]   (ISO date)
+    #   global_temp    -> metadata["date"]       (year-end ISO date from resolution_date)
+    metadata = signal.get("metadata") or {}
     resolution = (
-        (signal.get("metadata") or {}).get("date")
+        metadata.get("date")
+        or metadata.get("deadline")
         or signal.get("resolution_date", "")
     )
     if resolution:
