@@ -193,12 +193,17 @@ def estimate_temp_ranking_probability(
     all_anomalies = list(anomalies.values())
     std_dev = statistics.stdev(all_anomalies[-20:])  # use recent volatility
 
-    # Simulate 1000 possible final anomalies for this year
+    # Simulate 10,000 possible final anomalies for this year.
+    # Key: seed depends ONLY on year + estimated_anomaly, NOT on the rank being
+    # queried.  This guarantees that calling estimate_temp_ranking_probability
+    # for rank=1, rank=2, rank=3, … all draw from the SAME underlying distribution,
+    # so P(rank=1)+P(rank=2)+…+P(rank=N+) = 1.0 exactly (up to integer rounding).
     import random
-    random.seed(42)  # reproducible
+    seed_val = int(abs(estimated_anomaly) * 10000) + year * 31
+    rng = random.Random(seed_val)
     simulated = [
-        estimated_anomaly + random.gauss(0, std_dev * 0.6)  # tighter than full historical std
-        for _ in range(1000)
+        estimated_anomaly + rng.gauss(0, std_dev * 0.6)
+        for _ in range(10_000)
     ]
 
     # Get the ranking record (sorted descending = hottest first)
