@@ -69,6 +69,9 @@ _NON_WEATHER_PHRASES = [
     "carolina hurricane", "miami heat", "seattle storm", "as storm",
     "oklahoma city thunder", "stanley cup", "nba finals", "nhl ",
     "wnba ", "stars fc", "thunder fc", "fc storm",
+    # Stock / finance false positives — "celsius" matches the ticker CELH
+    "celh", "celsius (", "celsius energy", "beat quarterly earnings",
+    "beat earnings", "quarterly earnings",
 ]
 
 
@@ -322,21 +325,142 @@ def parse_contract_metadata(contract: dict) -> dict | None:
     Extract structured parameters from a contract's question.
 
     Returns one of:
-      * Monthly-precipitation bucket (market_class='monthly_precip'):
-          city, lat, lon, month_iso ("YYYY-MM"), bucket_low, bucket_high, unit
-      * Daily-weather schema (market_class='daily_weather'):
-          lat, lon, date, variable, threshold, unit
-      * Hurricane schema (market_class='hurricane'):
-          hurricane_type, deadline
+      * Monthly-precipitation bucket  (market_class='monthly_precip')
+      * Daily-weather schema           (market_class='daily_weather')
+      * Hurricane schema               (market_class='hurricane')
+      * Annual temp ranking            (market_class='global_temp')
+      * Monthly temp ranking           (market_class='monthly_temp_rank')
+      * Monthly temp anomaly           (market_class='monthly_temp_anomaly')
+      * Arctic sea ice extent          (market_class='arctic_sea_ice')
       * None if no match.
     """
     question = contract.get("question", "").lower()
+    raw_question = contract.get("question", "")
     if not question:
         return None
 
-    # --- 0) Global temperature ranking markets --------------------------
-    # These must be checked first because they don't contain city names
-    # and would fall through to the daily-weather parser incorrectly.
+    # --- -1) Arctic sea ice extent ----------------------------------------
+    if "arctic" in question or "sea ice" in question:
+        rd = contract.get("resolution_date", "")
+        deadline = None
+        if rd:
+            try:
+                deadline = datetime.fromisoformat(rd.replace("Z", "+00:00")).date().isoformat()
+            except (ValueError, TypeError):
+                pass
+        extent_low: float | None = None
+        extent_high: float | None = None
+        is_upper_bound = False
+        is_lower_bound = False
+        lt_match  = re.search(r"less than\s+([\d.]+)\s*m", question)
+        ge_match  = re.search(r"at least\s+([\d.]+)\s*m", question)
+        bet_match = re.search(r"between\s+([\d.]+)\s*m\s*[&and]+\s*([\d.]+)\s*m", question)
+        if lt_match:
+            extent_high = float(lt_match.group(1)); is_upper_bound = True
+        elif ge_match:
+            extent_low = float(ge_match.group(1)); is_lower_bound = True
+        elif bet_match:
+            extent_low = float(bet_match.group(1)); extent_high = float(bet_match.group(2))
+        return {
+            "market_class": "arctic_sea_ice",
+            "extent_low_m": extent_low, "extent_high_m": extent_high,
+            "is_upper_bound": is_upper_bound, "is_lower_bound": is_lower_bound,
+            "deadline": deadline, "date": deadline,
+            "lat": None, "lon": None, "variable": None, "threshold": None,
+            "unit": "million_sq_km",
+        }
+
+    # --- 0a) Monthly temperature ANOMALY markets --------------------------
+    # "Will global temperature increase by between 1.20°C and 1.24°C in April 2026?"
+    if "global temperature" in question and ("increase by" in question or "°c" in question or "ºc" in question):
+        import calendar as _cal
+        MONTHS_FULL = {m.lower(): i for i, m in enumerate(_cal.month_name) if m}
+        month_num: int | None = None
+        year_a: int | None = None
+        for mname, mnum in MONTHS_FULL.items():
+            if mname in question:
+                month_num = mnum; break
+        yr_m = re.search(r"\b(202\d)\b", question)
+        if yr_m:
+            year_a = int(yr_m.group(1))
+        q_norm = question.replace("ºc", "°c")
+        low_a: float | None = None; high_a: float | None = None
+        is_upper_a = False; is_lower_a = False
+        lt_m  = re.search(r"less than\s+([\d.]+)\s*°c", q_norm)
+        gt_m  = re.search(r"more than\s+([\d.]+)\s*°c", q_norm)
+        bet_m = re.search(r"between\s+([\d.]+)\s*°c\s*and\s*([\d.]+)\s*°c", q_norm)
+        if bet_m:
+            low_a = float(bet_m.group(1)); high_a = float(bet_m.group(2))
+        elif lt_m:
+            high_a = float(lt_m.group(1)); is_upper_a = True
+        elif gt_m:
+            low_a = float(gt_m.group(1)); is_lower_a = True
+        rd = contract.get("resolution_date", "")
+        deadline = None
+        if rd:
+            try:
+                deadline = datetime.fromisoformat(rd.replace("Z", "+00:00")).date().isoformat()
+            except (ValueError, TypeError):
+                pass
+        return {
+            "market_class": "monthly_temp_anomaly",
+            "anomaly_month": month_num, "anomaly_year": year_a,
+            "anomaly_low_c": low_a, "anomaly_high_c": high_a,
+            "is_upper_bound": is_upper_a, "is_lower_bound": is_lower_a,
+            "deadline": deadline, "date": deadline,
+            "lat": None, "lon": None, "variable": None, "threshold": None, "unit": "°C",
+        }
+
+    # --- 0b) Monthly temperature RANKING markets --------------------------
+    # "Will May 2026 be the 3rd hottest on record?"
+    # "Will any month of 2026 be the hottest on record?"
+    _MONTH_RANK_PAT = re.compile(
+        r"\b(january|february|march|april|may|june|july|august|september|october|november|december"
+        r"|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\b.*?\b(202\d)\b.*?"
+        r"\b(\d+)(?:st|nd|rd|th)?\b.*?\b(hottest|coldest|warmest)\b",
+        re.IGNORECASE,
+    )
+    _ANY_MONTH_PAT = re.compile(
+        r"\bany month of\s+(202\d)\b.*?\b(hottest|coldest|warmest)\b",
+        re.IGNORECASE,
+    )
+    month_rank_m = _MONTH_RANK_PAT.search(raw_question)
+    any_month_m  = _ANY_MONTH_PAT.search(raw_question)
+    if month_rank_m or any_month_m:
+        import calendar as _cal2
+        MFULL = {m.lower(): i for i, m in enumerate(_cal2.month_name) if m}
+        MABBR = {m[:3].lower(): i for i, m in enumerate(_cal2.month_name) if m}
+        if month_rank_m:
+            mn = month_rank_m.group(1).lower()
+            month_num_r = MFULL.get(mn) or MABBR.get(mn[:3])
+            year_r = int(month_rank_m.group(2))
+            rank_r = int(month_rank_m.group(3))
+            dir_r  = month_rank_m.group(4).lower()
+        else:
+            month_num_r = None
+            year_r = int(any_month_m.group(1))
+            rank_r = 1
+            dir_r  = any_month_m.group(2).lower()
+        lower_bound_r = bool(re.search(r"\bor lower\b|\bor below\b|\bor cooler\b", question))
+        rd = contract.get("resolution_date", "")
+        deadline = None
+        if rd:
+            try:
+                deadline = datetime.fromisoformat(rd.replace("Z", "+00:00")).date().isoformat()
+            except (ValueError, TypeError):
+                pass
+        return {
+            "market_class": "monthly_temp_rank",
+            "temp_month": month_num_r, "temp_year": year_r,
+            "temp_rank": rank_r, "temp_direction": dir_r,
+            "temp_lower_bound": lower_bound_r,
+            "any_month": any_month_m is not None,
+            "deadline": deadline, "date": deadline,
+            "lat": None, "lon": None, "variable": None, "threshold": None, "unit": None,
+        }
+
+    # --- 0c) Annual global temperature ranking --------------------------
+    # Checked AFTER monthly variants so monthly questions don't match annual classifier.
     try:
         from global_temp_model import classify_temp_market
         temp_info = classify_temp_market(contract.get("question", ""))
