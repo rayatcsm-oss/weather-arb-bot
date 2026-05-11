@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS signals (
     timestamp        TEXT NOT NULL,
     contract_id      TEXT NOT NULL,
     question         TEXT,
+    market_class     TEXT,
     market_p         REAL,
     model_p          REAL,
     ev               REAL,
@@ -101,6 +102,35 @@ def init_db() -> None:
         ]:
             if col not in existing_cols:
                 conn.execute(f"ALTER TABLE positions ADD COLUMN {col} {decl}")
+
+        # Lazy migration: add market_class to signals table for existing DBs
+        existing_sig_cols = {r["name"] for r in conn.execute("PRAGMA table_info(signals)").fetchall()}
+        if "market_class" not in existing_sig_cols:
+            conn.execute("ALTER TABLE signals ADD COLUMN market_class TEXT")
+
+        # Reconcile executed flag: mark the latest signal for each contract as
+        # executed=1 if an open position already exists for that contract+side.
+        # This fixes the case where a position was placed before its signal was
+        # inserted (e.g. via a direct API/UI call) so mark_signal_executed never ran.
+        conn.execute("""
+            UPDATE signals
+               SET executed = 1
+             WHERE executed = 0
+               AND id IN (
+                   SELECT s.id
+                     FROM signals s
+                     JOIN positions p
+                       ON p.contract_id = s.contract_id
+                      AND p.side        = s.recommended_side
+                      AND p.status      = 'open'
+                    WHERE s.id = (
+                        SELECT id FROM signals s2
+                         WHERE s2.contract_id = s.contract_id
+                         ORDER BY s2.timestamp DESC
+                         LIMIT 1
+                    )
+               )
+        """)
     logger.info(f"Database initialized at {DB_PATH}")
 
 
@@ -129,9 +159,10 @@ def insert_signal(signal: dict) -> int:
             # Update the existing row with fresh model/market data
             conn.execute(
                 """UPDATE signals SET market_p=?, model_p=?, ev=?, recommended_side=?,
-                   kelly_size=?, timestamp=? WHERE id=?""",
+                   kelly_size=?, market_class=?, timestamp=? WHERE id=?""",
                 (signal.get("market_p"), signal.get("model_p"), signal.get("ev"),
                  signal.get("recommended_side"), signal.get("kelly_size"),
+                 signal.get("market_class"),
                  signal.get("timestamp", datetime.now(timezone.utc).isoformat()),
                  existing["id"])
             )
@@ -141,14 +172,15 @@ def insert_signal(signal: dict) -> int:
         cursor = conn.execute(
             """
             INSERT INTO signals (
-                timestamp, contract_id, question, market_p, model_p,
+                timestamp, contract_id, question, market_class, market_p, model_p,
                 ev, recommended_side, kelly_size, executed
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 signal.get("timestamp", datetime.now(timezone.utc).isoformat()),
                 signal["contract_id"],
                 signal.get("question", ""),
+                signal.get("market_class"),
                 signal.get("market_p"),
                 signal.get("model_p"),
                 signal.get("ev"),
@@ -157,7 +189,27 @@ def insert_signal(signal: dict) -> int:
                 int(signal.get("executed", 0)),
             ),
         )
-        return int(cursor.lastrowid)
+        row_id = int(cursor.lastrowid)
+
+        # Prune: keep only the 500 most recent signals to prevent unbounded growth.
+        # Executed signals and those with outcomes are preserved regardless.
+        # Note: SQLite does not allow ORDER BY inside a UNION branch directly —
+        # it must be wrapped in a subquery.
+        conn.execute("""
+            DELETE FROM signals
+            WHERE id NOT IN (
+                SELECT id FROM signals
+                WHERE executed = 1 OR outcome IS NOT NULL
+                UNION
+                SELECT id FROM (
+                    SELECT id FROM signals
+                    ORDER BY timestamp DESC
+                    LIMIT 500
+                )
+            )
+        """)
+
+        return row_id
 
 
 def mark_signal_executed(signal_id: int) -> None:
