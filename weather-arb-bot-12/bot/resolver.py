@@ -157,6 +157,31 @@ def update_unrealized_pnl() -> int:
             logger.warning(f"Failed to refresh price for {contract_id[:12]}: {e}")
             continue
         if not status:
+            # Market is no longer returned by Gamma API — it has been delisted or removed.
+            # Close the position at the last known price (or entry price if never priced)
+            # so it doesn't linger as an open position forever.
+            last_px = p.get("current_price") or p.get("entry_price") or 0
+            entry_price_rem = p.get("entry_price") or 0
+            size_usdc_rem   = p.get("size_usdc")   or 0
+            side_rem        = p.get("side", "YES")
+            if entry_price_rem > 0:
+                shares_rem = size_usdc_rem / entry_price_rem
+                pnl_rem    = round(shares_rem * (last_px - entry_price_rem), 2)
+            else:
+                pnl_rem = 0.0
+            now_iso = datetime.now(timezone.utc).isoformat()
+            with get_conn() as conn:
+                conn.execute(
+                    """UPDATE positions
+                          SET status='closed', exit_price=?, exit_time=?, pnl=?,
+                              close_reason='market_removed'
+                        WHERE id=?""",
+                    (last_px, now_iso, pnl_rem, p["id"]),
+                )
+            logger.info(
+                f"Auto-closed pos#{p['id']} {side_rem} — market {contract_id[:12]} "
+                f"no longer on Gamma (market_removed) pnl={pnl_rem:+.2f}"
+            )
             continue
 
         side        = p.get("side")
